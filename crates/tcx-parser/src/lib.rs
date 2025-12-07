@@ -177,22 +177,53 @@ impl TcxEditor {
     }
 
     /// Trim the track to a specific range of trackpoint indices (inclusive)
+    /// Indices are for the flattened list of all trackpoints across all laps
     #[wasm_bindgen(js_name = trimByIndices)]
     pub fn trim_by_indices(&mut self, start_idx: usize, end_idx: usize) -> Result<(), JsValue> {
-        for activity in &mut self.database.activities.activity {
-            for lap in &mut activity.laps {
+        let total_count = self.get_trackpoint_count();
+
+        if start_idx > end_idx {
+            return Err(JsValue::from_str(&format!(
+                "Invalid indices: start ({}) > end ({})",
+                start_idx, end_idx
+            )));
+        }
+
+        if end_idx >= total_count {
+            return Err(JsValue::from_str(&format!(
+                "Invalid indices: end ({}) >= total ({})",
+                end_idx, total_count
+            )));
+        }
+
+        // Collect all trackpoints into a flat list
+        let all_trackpoints: Vec<Trackpoint> = self.database
+            .activities
+            .activity
+            .iter()
+            .flat_map(|a| &a.laps)
+            .filter_map(|l| l.track.as_ref())
+            .flat_map(|t| t.trackpoints.clone())
+            .collect();
+
+        // Get the trimmed slice
+        let trimmed: Vec<Trackpoint> = all_trackpoints[start_idx..=end_idx].to_vec();
+
+        // For simplicity, put all trimmed trackpoints into the first lap's track
+        // and remove other laps (this is a reasonable simplification for trimming)
+        if let Some(activity) = self.database.activities.activity.first_mut() {
+            // Keep only the first lap
+            activity.laps.truncate(1);
+
+            if let Some(lap) = activity.laps.first_mut() {
                 if let Some(ref mut track) = lap.track {
-                    let len = track.trackpoints.len();
-                    if start_idx >= len || end_idx >= len || start_idx > end_idx {
-                        return Err(JsValue::from_str(&format!(
-                            "Invalid indices: start={}, end={}, total={}",
-                            start_idx, end_idx, len
-                        )));
-                    }
-                    track.trackpoints = track.trackpoints[start_idx..=end_idx].to_vec();
+                    track.trackpoints = trimmed;
+                } else {
+                    lap.track = Some(Track { trackpoints: trimmed });
                 }
             }
         }
+
         self.recalculate_lap_stats();
         Ok(())
     }
